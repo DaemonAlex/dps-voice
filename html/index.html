@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>dps-voice</title>
+<style>html,body{margin:0;padding:0;background:transparent;overflow:hidden}</style>
+</head>
+<body>
+<script>
+// One element per line, thrown away when it ends, so overlapping lines do not cut
+// each other off and nothing accumulates.
+window.addEventListener('message', function (e) {
+  var d = e.data || {};
+  if (d.action !== 'play' || !d.audio) return;
+
+  var a = new Audio('data:' + (d.mime || 'audio/wav') + ';base64,' + d.audio);
+  a.volume = Math.max(0, Math.min(1, typeof d.volume === 'number' ? d.volume : 1));
+  a.addEventListener('ended', function () { a.src = ''; });
+  a.addEventListener('error', function () { a.src = ''; });
+  a.play().catch(function () { /* nothing to do: the line is simply not heard */ });
+});
+
+fetch('https://dps-voice/ready', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: '{}'
+}).catch(function () {});
+</script>
+</body>
+</html>

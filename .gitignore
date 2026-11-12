@@ -1,0 +1,9 @@
+# Generated speech cache
+cache/
+*.ogg
+*.mp3
+*.wav
+# Keys never go in git
+*.env
+secrets.lua
+server/endpoints.lua
