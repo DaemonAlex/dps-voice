@@ -3,7 +3,7 @@
 
 local inFlight   = 0
 local queue      = {}
-local lastAsk    = {}      -- player id -> os.clock()
+local lastAsk    = {}      -- player id -> os.time() of their last line
 local minuteMark, minuteCount = 0, 0
 
 local function log(fmt, ...)
@@ -26,11 +26,38 @@ end
 
 local function playerAllowed(src)
     if not src or src == 0 then return true end           -- our own scripts are not rate limited
-    local now = os.clock()
+    local now = os.time()     -- wall time (os.clock is CPU time, so "3 seconds" was not 3 seconds)
     local last = lastAsk[src]
     if last and (now - last) < Config.perPlayerSeconds then return false end
     lastAsk[src] = now
     return true
+end
+
+--- PAID TALK BUDGET. Live talk with a named NPC is new text every time, so every sentence
+--- costs money. Each player gets a number of paid characters a day; after that the NPC
+--- answers in its free voice. Kept per licence, per day, across restarts.
+local function payerKey(player)
+    if not player or player == 0 then return nil end
+    local id = GetPlayerIdentifierByType(player, 'license2') or GetPlayerIdentifierByType(player, 'license')
+    if not id then return nil end
+    return ('paid:%s:%s'):format(id, os.date('%Y%m%d'))
+end
+
+local function paidSpent(player)
+    local key = payerKey(player)
+    return key and (GetResourceKvpInt(key) or 0) or 0
+end
+
+local function paidRoom(player, chars)
+    local cap = Config.paidTalk and Config.paidTalk.dailyCharsPerPlayer
+    if not cap then return true end                       -- no budget set: no limit
+    if not payerKey(player) then return false end         -- nobody to charge it to: free voice
+    return paidSpent(player) + chars <= cap
+end
+
+local function paidCharge(player, chars)
+    local key = payerKey(player)
+    if key then SetResourceKvpInt(key, paidSpent(player) + chars) end
 end
 
 local function clean(text, fromPlayer)
@@ -100,7 +127,9 @@ local function pump()
             end
 
             local p     = Config.providers[name]
-            local voice = (name == job.provider and job.voice) or p.voice
+            --- A fallback speaks in that NPC's own free voice, not the provider's default.
+            --- (Four women used to turn into a man whenever the paid voice failed.)
+            local voice = (name == job.provider and job.voice) or (not p.keyEnv and job.freeVoice) or p.voice
             Providers.speak(name, job.text, voice, function(data, mime, reason)
                 if not data then
                     log('%s failed: %s', name, tostring(reason))
@@ -111,6 +140,7 @@ local function pump()
                 Cache.put(Cache.key(name, p.model, voice, p.lang, job.text), data, mime,
                           { provider = name, voice = voice, paid = p.keyEnv ~= nil })
                 inFlight = inFlight - 1
+                if job.payer and p.keyEnv then paidCharge(job.payer, #job.text) end
                 send({ audio = Providers.base64(data), mime = mime,
                        volume = job.volume, range = job.range }, job.targets, job.coords)
                 log('%s spoke %d chars as %s (%d bytes, %s)', name, #job.text, voice, #data,
@@ -144,7 +174,11 @@ local function Say(opts)
     if not text then return false, 'no text' end
 
     if not playerAllowed(opts.src) then return false, 'rate limited' end
-    if not globalAllowed() then return false, 'server busy' end
+
+    --- Who the paid characters of a live reply are charged to: the player who caused
+    --- the line, or the one player it is spoken to.
+    local payer = (fromPlayer and opts.src) or (type(opts.targets) == 'number' and opts.targets) or nil
+    local freeVoice, freeTalk
 
     --- ROUTING. A named NPC listed in Config.namedVoices speaks with that voice and
     --- provider. Anything else - transit, dispatch, shops, background peds - is free
@@ -153,15 +187,18 @@ local function Say(opts)
     if not provider and opts.npc then
         local named = Config.namedVoices[opts.npc]
         if named then
-            --- A conversation is novel text every time, so the cache never helps and
-            --- the paid provider would charge for every sentence. Keep the character
-            --- by using that NPC's own free voice instead of their paid one.
-            if opts.conversation and Config.conversationFree and named.free then
+            freeVoice = named.free
+            --- Scripted lines (greetings, set lines) repeat, cache, and cost once: they
+            --- get the paid voice. A conversation is novel text every time, so it gets
+            --- the paid voice only while this player has paid characters left today,
+            --- or not at all when Config.conversationFree is on.
+            if opts.conversation and named.free and Config.conversationFree then
                 provider = Config.provider
                 voice    = voice or named.free
             else
                 provider = named.provider
                 voice    = voice or named.voice
+                freeTalk = opts.conversation and named.free ~= nil
             end
         end
     end
@@ -189,6 +226,28 @@ local function Say(opts)
         return true
     end
 
+    --- Not cached, so this would be bought now. Live talk past the player's daily budget
+    --- (or with spending switched off) is said in the NPC's free voice instead.
+    local chargeTo
+    if freeTalk and p and p.keyEnv then
+        if Config.spendMoney and paidRoom(payer, #text) then
+            chargeTo = payer
+        else
+            provider, voice = Config.provider, freeVoice
+            p = Config.providers[provider]
+            b64, mime = Cache.get(Cache.key(provider, p and p.model, voice, p and p.lang, text))
+            if b64 then
+                send({ audio = b64, mime = mime, volume = opts.volume, range = opts.range },
+                     opts.targets, opts.coords)
+                return true
+            end
+        end
+    end
+
+    --- Only a line that needs generating counts against the shared limit. A cached line
+    --- costs nothing, so a player repeating one can no longer use up everyone's minute.
+    if not globalAllowed() then return false, 'server busy' end
+
     if #queue >= Config.queueMax then
         warn('queue full, dropped "%s"', text:sub(1, 40))
         return false, 'queue full'
@@ -198,6 +257,7 @@ local function Say(opts)
         text = text, voice = voice, provider = provider,
         targets = opts.targets, coords = opts.coords,
         range = opts.range, volume = opts.volume,
+        freeVoice = freeVoice, payer = chargeTo,
     }
     pump()
     return true
@@ -205,11 +265,17 @@ end
 
 exports('Say', Say)
 
---- A player-facing line goes through here so its length and rate are capped.
-RegisterNetEvent('dps-voice:request', function(text, voice)
-    local src = source
-    Say({ text = text, voice = voice, src = src, targets = src })
-end)
+--- (The open 'dps-voice:request' event is gone. Nothing used it, and it let any player's
+--- game make the server speak any text in any voice. Scripts use the Say export.)
+
+--- Console only. What one player has used of today's paid talk. voicebudget <player id>
+RegisterCommand('voicebudget', function(src, args)
+    if src ~= 0 then return end
+    local cap = Config.paidTalk and Config.paidTalk.dailyCharsPerPlayer
+    local id = tonumber(args[1])
+    if not id then return print(('[dps-voice] paid talk budget: %s characters a player a day. voicebudget <player id>'):format(tostring(cap or 'none'))) end
+    print(('[dps-voice] player %d has used %d of %s paid characters today'):format(id, paidSpent(id), tostring(cap or 'no limit')))
+end, true)
 
 --- Console only. Proves a provider end to end and reports what came back.
 RegisterCommand('voicetest', function(src, args)
@@ -226,7 +292,7 @@ RegisterCommand('voicetest', function(src, args)
         :format(provider, #text, voice or p.voice or '-'))
     Providers.speak(provider, text, voice, function(b64, mime, reason)
         if not b64 then return print(('[dps-voice] FAILED: %s'):format(tostring(reason))) end
-        print(('[dps-voice] OK: %s, %d bytes of base64, binary survived the HTTP call')
+        print(('[dps-voice] OK: %s, %d bytes, binary survived the HTTP call')
             :format(mime, #b64))
     end)
 end, true)

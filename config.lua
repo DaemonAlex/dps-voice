@@ -130,6 +130,14 @@ Config.roleVoices = {
 --- voice stays for scripted lines that repeat and cache to nothing.
 Config.conversationFree = false   -- Damon 31 Oct: use the picked character voices in conversation too
 
+--- PAID TALK BUDGET (Damon 20 Nov: "scripted for basics and the limit is fine until we find a
+--- good local voice model"). Scripted lines always get the paid voice: they repeat, so each one
+--- is bought once and then comes from the cache. Live talk gets the paid voice until the player
+--- has used this many paid characters today; after that the NPC answers in its free voice.
+--- A reply is about 250 characters, so 3000 is about 12 paid replies a player a day.
+--- Remove the number (or the whole table) for no limit; set conversationFree for no paid talk.
+Config.paidTalk = { dailyCharsPerPlayer = 3000 }
+
 --- Caps. Text from a player is clamped to playerChars; our own scripts get maxChars.
 Config.maxChars        = 700   -- the AI NPC prompts allow up to 100 words; 320 cut replies mid-sentence
 Config.playerChars     = 140

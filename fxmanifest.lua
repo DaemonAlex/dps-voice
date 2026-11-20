@@ -5,7 +5,7 @@ lua54 'yes'
 name 'dps-voice'
 author 'DelPerroSands'
 description 'Spoken lines for NPCs, dispatch, transit and shops. Server-side only: it calls the voice provider, caches the audio and hands it to the players who should hear it.'
-version '1.0.0'
+version '1.1.0'
 
 shared_script 'config.lua'
 
