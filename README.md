@@ -142,6 +142,7 @@ Server console commands:
 
 ## Recent changes
 
+- **20 November 2026 (1.1.0).** Paid talk budget: scripted lines keep the paid voice (bought once, then cached); live talk uses the paid voice until a player has used `Config.paidTalk.dailyCharsPerPlayer` characters that day (3000), then the NPC's free voice. Cached lines no longer count against the shared 40-a-minute limit, so one player cannot mute voice for everyone. The open `dps-voice:request` event is removed. A fallback now speaks in the NPC's own free voice. The per-player wait uses real time. `voicebudget <player id>` on the console shows what a player has used.
 - **12 November 2026.** README added.
 - **31 October 2026.** Audio is stored on disk as real files with an index, so stored lines
   survive a restart.

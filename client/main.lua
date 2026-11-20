@@ -40,8 +40,4 @@ RegisterNetEvent('dps-voice:play', function(payload)
     })
 end)
 
---- Ask the server to speak a line for this player only. Length and rate are capped
---- server side; nothing here can raise them.
-function VoiceSay(text, voice)
-    TriggerServerEvent('dps-voice:request', text, voice)
-end
+-- (VoiceSay and the open server event it used are gone: nothing called them.)
